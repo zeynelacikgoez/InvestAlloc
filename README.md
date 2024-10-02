@@ -39,8 +39,8 @@ The **Resource Allocation Framework** is a Python-based tool designed to optimiz
 1. **Clone the Repository**
 
    ```bash
-   git clone https://github.com/yourusername/resource-allocation-framework.git
-   cd resource-allocation-framework
+   git clone https://github.com/zeynel/FoundersAlloc.git
+   cd FoundersAlloc
    ```
 
 2. **Create a Virtual Environment (Optional but Recommended)**
