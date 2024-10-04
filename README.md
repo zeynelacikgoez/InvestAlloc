@@ -2,284 +2,124 @@
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
+This project is an investment optimization tool that maximizes the efficiency of resource allocation across various investment areas. Using numerical optimization techniques, the tool takes into account different parameters such as efficiency, synergies between investments, budget constraints, and bounds for each investment. The project is written in Python and utilizes powerful optimization algorithms available in libraries like `scipy` and `numpy`.
+
 ## Table of Contents
 
-- [Overview](#overview)
 - [Features](#features)
 - [Installation](#installation)
 - [Usage](#usage)
-  - [Configuration](#configuration)
-  - [Running Analyses](#running-analyses)
-    - [Budget Optimization](#budget-optimization)
-    - [Sensitivity Analysis](#sensitivity-analysis)
-    - [Robustness Analysis](#robustness-analysis)
-- [Examples](#examples)
-- [Configuration File](#configuration-file)
-- [Plotting](#plotting)
-- [Logging](#logging)
+- [Configuration](#configuration)
+- [Optimization Methods](#optimization-methods)
+- [Visualization](#visualization)
 - [License](#license)
-- [Contributing](#contributing)
-- [Contact](#contact)
-
-## Overview
-
-The **Resource Allocation Framework** is a Python-based tool designed to optimize the allocation of resources under various constraints. It offers functionalities for budget optimization, sensitivity analysis, and robustness analysis, making it suitable for businesses and researchers aiming to maximize utility while effectively managing resources.
 
 ## Features
 
-- **Budget Optimization**: Optimize resource allocations to maximize utility under a given budget.
-- **Sensitivity Analysis**: Analyze how changes in budget affect optimal allocations and utility.
-- **Robustness Analysis**: Assess the stability of allocations under parameter perturbations.
-- **Configurable**: Easily customize parameters via configuration files.
-- **Visualization**: Generate plots to visualize sensitivity analysis results.
-- **Logging**: Provides informative logging to track the execution process.
+- Optimizes investment allocation across multiple areas given efficiency and synergy effects.
+- Supports multiple optimization methods including:
+  - Sequential Least Squares Programming (SLSQP)
+  - Differential Evolution (DE)
+  - Basin Hopping
+  - Truncated Newton Conjugate-Gradient (TNC)
+- Sensitivity analysis of optimal allocations based on changing budget or investment parameters.
+- Robustness analysis to evaluate the stability of allocations under uncertainty.
+- Interactive and static visualizations of sensitivity, robustness, and synergy effects.
 
 ## Installation
 
-1. **Clone the Repository**
+To install and run the Investment Optimizer, you need Python 3.6 or higher and the following Python packages:
 
-   ```bash
-   git clone https://github.com/zeynel/InvestAlloc.git
-   cd InvestAlloc
-   ```
+- `numpy`
+- `scipy`
+- `matplotlib`
+- `pandas`
+- `seaborn`
+- `plotly`
+- `logging`
 
-2. **Create a Virtual Environment (Optional but Recommended)**
+To install the required packages, you can run:
 
-   ```bash
-   python3 -m venv venv
-   source venv/bin/activate  # On Windows: venv\Scripts\activate
-   ```
-
-3. **Install Dependencies**
-
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-   *If `requirements.txt` is not provided, you can install the necessary packages manually:*
-
-   ```bash
-   pip install numpy scipy matplotlib pandas
-   ```
+```sh
+pip install -r requirements.txt
+```
 
 ## Usage
 
-The framework is executed via the command line and supports three types of analyses:
+The Investment Optimizer can be used via command line. It reads configuration parameters from a JSON file or uses default values.
 
-1. **Budget Optimization**
-2. **Sensitivity Analysis**
-3. **Robustness Analysis**
+### Command-Line Arguments
 
-### Configuration
+- `--config`: Path to a JSON configuration file that provides parameters such as efficiency (`a`), synergy effects (`b`), budget (`B`), lower bounds (`L`), upper bounds (`U`), and initial guess (`x0`).
+- `--interactive`: If provided, will use interactive visualizations (`plotly`).
 
-You can provide a configuration file in JSON format to specify parameters for the analyses. If no configuration file is provided, the framework uses default settings.
+To run the script, use:
 
-**Sample Configuration (`config.json`):**
-
-```json
-{
-    "a": [1, 2, 3, 4],
-    "b": [
-        [0, 0.1, 0.2, 0.3],
-        [0, 0, 0.4, 0.5],
-        [0, 0, 0, 0.6],
-        [0, 0, 0, 0]
-    ],
-    "B": 10,
-    "L": [1, 1, 1, 1],
-    "U": [5, 5, 5, 5],
-    "x0": [2, 2, 2, 4],
-    "method": "SLSQP",
-    "resource_names": ["R&D", "Marketing", "Sales", "Customer Service"],
-    "penalty_factor": 1000000
-}
+```sh
+python investment_optimizer.py --config config.json --interactive
 ```
 
-### Running Analyses
+### Example Parameters
 
-Use the `main.py` script to perform analyses. The general syntax is:
+If no configuration file is provided, the following default parameters are used:
 
-```bash
-python main.py ANALYSIS_TYPE [OPTIONS]
-```
+- Investment areas: `['F&E', 'Marketing', 'Vertrieb', 'Kundenservice']`
+- Efficiency parameters: `[1, 2, 3, 4]`
+- Synergy matrix:
+  ```
+  [[0, 0.1, 0.2, 0.3],
+   [0.1, 0, 0.4, 0.5],
+   [0.2, 0.4, 0, 0.6],
+   [0.3, 0.5, 0.6, 0]]
+  ```
+- Total budget (`B`): `10.0`
+- Minimum investments (`L`): `[1, 1, 1, 1]`
+- Maximum investments (`U`): `[5, 5, 5, 5]`
+- Initial guess (`x0`): `[2, 2, 2, 4]`
 
-#### Budget Optimization
+## Configuration
 
-Optimize resource allocations to maximize utility within a budget.
+You can provide a configuration file in JSON format with the following keys:
 
-**Command:**
+- `a`: List of efficiency parameters.
+- `b`: 2D list representing the synergy matrix (must be symmetric).
+- `B`: Total budget.
+- `L`: List of minimum investments for each area.
+- `U`: List of maximum investments for each area.
+- `x0`: Initial investment allocation guess.
+- `investment_labels` (optional): List of names for the investment areas.
 
-```bash
-python main.py budget_optimization --config config.json
-```
+## Optimization Methods
 
-**Options:**
+The Investment Optimizer provides several optimization methods:
 
-- `--config`: Path to the configuration file.
-- `--save_config`: Path to save the default configuration file.
+- **SLSQP (Sequential Least Squares Programming)**: Suitable for constrained optimization.
+- **Differential Evolution (DE)**: Useful for global optimization and finding the global minimum.
+- **Basin Hopping**: Combines local optimization with random sampling to find the global minimum.
+- **TNC (Truncated Newton Conjugate-Gradient)**: An efficient optimization method for large-scale problems.
 
-**Example Output:**
+The optimization can be started with different methods using the `optimize()` function in the `InvestmentOptimizer` class.
 
-```
-Optimal Allocation: [x1, x2, x3, x4]
-Maximum Utility: 12.345
-```
+## Visualization
 
-#### Sensitivity Analysis
+The project includes the following visualization capabilities:
 
-Analyze how different budget values affect the optimal allocations and utility.
-
-**Command:**
-
-```bash
-python main.py sensitivity_analysis --config config.json
-```
-
-**Options:**
-
-- `--config`: Path to the configuration file.
-- `--save_config`: Path to save the default configuration file.
-
-**Example Output:**
-
-```
-Sensitivity analysis plot saved as 'sensitivity_analysis.png'
-```
-
-#### Robustness Analysis
-
-Assess the stability of resource allocations under parameter perturbations.
-
-**Command:**
-
-```bash
-python main.py robustness_analysis --config config.json
-```
-
-**Options:**
-
-- `--config`: Path to the configuration file.
-- `--save_config`: Path to save the default configuration file.
-
-**Example Output:**
-
-```
-Robustness Analysis Results:
-         R&D  Marketing    Sales  Customer Service
-count  100.0       100.0    100.0              100.0
-mean     ...         ...      ...                ...
-std      ...         ...      ...                ...
-min      ...         ...      ...                ...
-25%      ...         ...      ...                ...
-50%      ...         ...      ...                ...
-75%      ...         ...      ...                ...
-max      ...         ...      ...                ...
-```
-
-## Examples
-
-### Running Budget Optimization with Default Settings
-
-```bash
-python main.py budget_optimization
-```
-
-### Saving the Default Configuration
-
-```bash
-python main.py budget_optimization --save_config default_config.json
-```
-
-### Running Sensitivity Analysis with a Custom Configuration
-
-```bash
-python main.py sensitivity_analysis --config my_config.json
-```
-
-## Configuration File
-
-The configuration file is a JSON file that specifies the parameters for the analyses. Below are the parameters you can set:
-
-- `a` (list): Linear utility coefficients.
-- `b` (list of lists): Quadratic utility coefficients matrix (upper triangular).
-- `B` (float): Total budget.
-- `L` (list): Minimum investments for each resource.
-- `U` (list): Maximum investments for each resource.
-- `x0` (list): Initial guess for investments.
-- `method` (str): Optimization method (`SLSQP` or `DE`).
-- `resource_names` (list): Names of the resources.
-- `penalty_factor` (float): Penalty factor for the Differential Evolution method.
-
-**Example:**
-
-```json
-{
-    "a": [1, 2, 3, 4],
-    "b": [
-        [0, 0.1, 0.2, 0.3],
-        [0, 0, 0.4, 0.5],
-        [0, 0, 0, 0.6],
-        [0, 0, 0, 0]
-    ],
-    "B": 10,
-    "L": [1, 1, 1, 1],
-    "U": [5, 5, 5, 5],
-    "x0": [2, 2, 2, 4],
-    "method": "SLSQP",
-    "resource_names": ["R&D", "Marketing", "Sales", "Customer Service"],
-    "penalty_factor": 1000000
-}
-```
-
-## Plotting
-
-When performing sensitivity analysis, the framework generates a plot showing how optimal investments for each resource change with varying budgets.
-
-**Default Plot File:** `sensitivity_analysis.png`
-
-You can customize the filename via the configuration or modify the `main.py` script as needed.
-
-## Logging
-
-The framework uses Python's `logging` module to provide informative messages during execution. By default, the logging level is set to `INFO`.
-
-**Example Logs:**
-
-```
-INFO: Configuration loaded from config.json.
-INFO: Sensitivity analysis plot saved as 'sensitivity_analysis.png'.
-WARNING: Optimization failed for B=15: ...
-ERROR: Simulation 5: Error during optimization: ...
-```
+- **Synergy Heatmap**: Shows the synergy between different investment areas.
+- **Sensitivity Analysis**: Evaluates how varying the total budget affects optimal allocations.
+- **Parameter Sensitivity Analysis**: Examines the effect of changing an individual parameter (`a` or `b`) on the overall allocation.
+- **Robustness Analysis**: Visualizes the stability of allocations when the input parameters are varied randomly.
+- **Interactive Dashboard**: Uses `plotly` to create interactive plots for a more detailed exploration of results.
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
-## Contributing
+---
 
-Contributions are welcome! Please follow these steps:
+Feel free to clone, modify, and use this project for your investment optimization tasks.
 
-1. **Fork the Repository**
+### Contributions
 
-2. **Create a New Branch**
+Contributions are welcome! Please open an issue or create a pull request for new features, bug fixes, or documentation improvements.
 
-   ```bash
-   git checkout -b feature/YourFeature
-   ```
 
-3. **Commit Your Changes**
-
-   ```bash
-   git commit -m "Add some feature"
-   ```
-
-4. **Push to the Branch**
-
-   ```bash
-   git push origin feature/YourFeature
-   ```
-
-5. **Open a Pull Request**
-
-Please ensure your code follows the project's coding standards and includes appropriate tests.
