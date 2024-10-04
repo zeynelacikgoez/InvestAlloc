@@ -1,5 +1,5 @@
 import numpy as np
-from scipy.optimize import minimize, differential_evolution, basinhopping, COBYLA, TNC, linprog
+from scipy.optimize import minimize, differential_evolution, basinhopping, NonlinearConstraint
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
@@ -12,7 +12,6 @@ import argparse
 import json
 import os
 from functools import lru_cache
-from numba import njit
 
 # ==========================
 # Logging-Konfiguration
@@ -55,8 +54,7 @@ def is_symmetric(matrix, tol=1e-8):
     """
     return np.allclose(matrix, matrix.T, atol=tol)
 
-
-def validate_inputs(a, b, B, L, U, x0):
+def validate_inputs(a, b, B, L, U, x0, epsilon_a=1e-6):
     """
     Validiert die Eingabeparameter.
 
@@ -74,6 +72,8 @@ def validate_inputs(a, b, B, L, U, x0):
         Höchste Investitionen.
     x0 : np.array
         Anfangsschätzung.
+    epsilon_a : float, optional
+        Mindestwert für Effizienzparameter. Standard ist 1e-6.
 
     Raises:
     ------
@@ -92,11 +92,18 @@ def validate_inputs(a, b, B, L, U, x0):
         raise ValueError("Für alle Bereiche muss L[i] <= U[i] gelten.")
     if np.sum(L) > B:
         raise ValueError("Die Summe der Mindestinvestitionen überschreitet das Gesamtbudget B.")
+    if np.sum(U) < B:
+        raise ValueError("Die Summe der Höchstinvestitionen U unterschreitet das Gesamtbudget B. Das Problem ist unlösbar.")
     if np.any(x0 < L):
         raise ValueError("Anfangsschätzung x0 unterschreitet mindestens eine Mindestinvestition L.")
     if np.any(x0 > U):
         raise ValueError("Anfangsschätzung x0 überschreitet mindestens eine Höchstinvestition U.")
-
+    if np.any(L <= 0):
+        raise ValueError("Alle Mindestinvestitionen L müssen größer als Null sein.")
+    if np.any(a <= epsilon_a):
+        raise ValueError(f"Alle Effizienzparameter a müssen größer als {epsilon_a} sein.")
+    if np.any(b < 0):
+        raise ValueError("Alle Synergieeffekte b müssen größer oder gleich Null sein.")
 
 def get_bounds(L, U):
     """
@@ -116,11 +123,9 @@ def get_bounds(L, U):
     """
     return [(L[i], U[i]) for i in range(len(L))]
 
-
-@njit
 def compute_synergy(x, b):
     """
-    Effiziente Berechnung der Synergieeffekte mit Numba.
+    Berechnet die Synergieeffekte zwischen den Investitionsbereichen.
 
     Parameters:
     ----------
@@ -134,83 +139,112 @@ def compute_synergy(x, b):
     float
         Gesamtsynergieeffekt.
     """
-    synergy = 0.0
-    n = len(x)
-    for i in range(n):
-        for j in range(i + 1, n):
-            synergy += b[i, j] * x[i] * x[j]
-    return synergy
+    # Effizientere Berechnung mittels quadratischer Form
+    return 0.5 * np.dot(x, np.dot(b, x))
 
-
-def objective(x, a, b, epsilon=1e-8):
+def validate_initial_guess(x, L, U, B, tol=1e-6):
     """
-    Berechnet den negativen Gesamtnutzen basierend auf den Investitionen x.
-
-    Nutzen wird durch den Logarithmus der Investitionen gewichtet mit Effizienzparametern 
-    sowie durch Synergieeffekte zwischen den Investitionsbereichen bestimmt.
+    Validiert, ob die Anfangsschätzung die Nebenbedingungen erfüllt.
 
     Parameters:
     ----------
     x : np.array
-        Investitionen in die Bereiche.
-    a : np.array
-        Effizienzparameter für jeden Bereich.
-    b : np.array
-        Synergieeffekte zwischen den Bereichen (quadratische Matrix).
-    epsilon : float, optional
-        Kleine Zahl zur Vermeidung von log(0). Standard ist 1e-8.
-
-    Returns:
-    -------
-    float
-        Negativer Gesamtnutzen (für Minimierung).
-    """
-    x = np.array(x)
-    a = np.array(a)
-
-    # Vermeidung von log(0) durch Hinzufügen einer kleinen Konstante
-    utility = np.sum(a * np.log(x + epsilon))
-    synergy = compute_synergy(x, b)
-    utility += synergy
-    logging.debug(f"Nutzen: {utility}")
-    return -utility
-
-
-def objective_with_penalty(x, a, b, B, L, penalty_factors):
-    """
-    Berechnet den negativen Gesamtnutzen mit quadratischen Strafkosten für Verletzung der Nebenbedingungen.
-
-    Parameters:
-    ----------
-    x : np.array
-        Investitionen in die Bereiche.
-    a : np.array
-        Effizienzparameter.
-    b : np.array
-        Synergieeffekte.
-    B : float
-        Gesamtbudget.
+        Anfangsschätzung.
     L : np.array
         Mindestinvestitionen.
-    penalty_factors : dict
-        Straffaktoren für 'budget' und 'min'.
+    U : np.array
+        Höchste Investitionen.
+    B : float
+        Gesamtbudget.
+    tol : float, optional
+        Toleranz für die Validierung. Standard ist 1e-6.
 
     Returns:
     -------
-    float
-        Negativer Gesamtnutzen plus Strafkosten.
+    bool
+        True, wenn alle Bedingungen erfüllt sind, sonst False.
     """
-    penalty = 0
-    budget_excess = np.sum(x) - B
-    if budget_excess > 0:
-        penalty += (budget_excess ** 2) * penalty_factors['budget']
-        logging.debug(f"Quadratische Budgetüberschreitung um {budget_excess} mit Strafkosten {penalty}")
-    min_deficit = L - x
-    min_deficit = np.where(min_deficit > 0, min_deficit, 0)
-    penalty += np.sum((min_deficit ** 2) * penalty_factors['min'])
-    logging.debug(f"Quadratische Mindestinvestitionsdefizite: {min_deficit}, Strafkosten insgesamt: {np.sum((min_deficit ** 2) * penalty_factors['min'])}")
-    return objective(x, a, b) + penalty
+    return (
+        np.isclose(np.sum(x), B, atol=tol, rtol=tol) and
+        np.all(x >= L - tol) and
+        np.all(x <= U + tol)
+    )
 
+def adjust_initial_guess(x0, L, U, B):
+    """
+    Passt die Anfangsschätzung an, um die Nebenbedingungen zu erfüllen, mittels linearer Programmierung.
+
+    Parameters:
+    ----------
+    x0 : np.array
+        Ursprüngliche Anfangsschätzung.
+    L : np.array
+        Mindestinvestitionen.
+    U : np.array
+        Höchste Investitionen.
+    B : float
+        Gesamtbudget.
+
+    Returns:
+    -------
+    np.array
+        Angepasste Anfangsschätzung.
+
+    Raises:
+    ------
+    ValueError
+        Wenn Anpassung nicht möglich ist.
+    """
+    n = len(x0)
+
+    # Überprüfen der Machbarkeit
+    if np.sum(L) > B:
+        raise ValueError("Die Summe der Mindestinvestitionen überschreitet das Gesamtbudget B. Das Problem ist unlösbar.")
+    if np.sum(U) < B:
+        raise ValueError("Die Summe der Höchstinvestitionen U unterschreitet das Gesamtbudget B. Das Problem ist unlösbar.")
+
+    # Ziel: Minimierung der Abweichung von x0
+    res = minimize(
+        lambda x: np.sum((x - x0) ** 2),
+        x0,
+        constraints=[{'type': 'eq', 'fun': lambda x: np.sum(x) - B}],
+        bounds=get_bounds(L, U),
+        method='SLSQP'
+    )
+
+    if res.success and validate_initial_guess(res.x, L, U, B):
+        return res.x
+    else:
+        logging.warning("Lineare Programmierung zur Anpassung der Anfangsschätzung fehlgeschlagen. Verwende Heuristik.")
+        # Fallback: Ursprungsschätzung proportional anpassen
+        x0 = np.clip(x0, L, U)
+        current_sum = np.sum(x0)
+        deficit = B - current_sum
+        if not np.isclose(current_sum, B, atol=1e-6, rtol=1e-6):
+            if deficit > 0:
+                # Erhöhen Sie die Investitionen proportional zu den verbleibenden Kapazitäten
+                capacity = U - x0
+                total_capacity = np.sum(capacity)
+                if total_capacity > 1e-8:  # Strengere Prüfung
+                    x0 += capacity * (deficit / total_capacity)
+                else:
+                    logging.error("Keine Kapazität zur Anpassung der Anfangsschätzung vorhanden.")
+                    raise ValueError("Anpassung der Anfangsschätzung nicht möglich: Keine Kapazität zur Erhöhung.")
+            else:
+                # Reduzieren Sie die Investitionen proportional zu den überschüssigen Beträgen
+                excess = x0 - L
+                total_excess = np.sum(excess)
+                if total_excess > 1e-8:  # Strengere Prüfung
+                    x0 -= excess * (-deficit / total_excess)
+                else:
+                    logging.error("Keine überschüssigen Investitionen zur Anpassung vorhanden.")
+                    raise ValueError("Anpassung der Anfangsschätzung nicht möglich: Keine überschüssigen Investitionen.")
+            x0 = np.clip(x0, L, U)
+            # Finaler Check
+            if not validate_initial_guess(x0, L, U, B):
+                logging.error("Angepasste Anfangsschätzung erfüllt die Nebenbedingungen nicht.")
+                raise ValueError("Angepasste Anfangsschätzung erfüllt die Nebenbedingungen nicht.")
+        return x0
 
 # ==========================
 # Ergebnisklasse
@@ -224,6 +258,89 @@ class OptimizationResult:
         for key, value in kwargs.items():
             setattr(self, key, value)
 
+# ==========================
+# Externe Simulation-Funktion
+# ==========================
+def single_simulation(sim_index, a, b, B, L, U, x0, investment_labels, method, variation_percentage, **kwargs):
+    """
+    Führt eine einzelne Simulationsrunde für die Robustheitsanalyse durch.
+
+    Parameters:
+    ----------
+    sim_index : int
+        Index der Simulation.
+    a : np.array
+        Effizienzparameter.
+    b : np.array
+        Synergieeffekte.
+    B : float
+        Gesamtbudget.
+    L : np.array
+        Mindestinvestitionen.
+    U : np.array
+        Höchste Investitionen.
+    x0 : np.array
+        Anfangsschätzung.
+    investment_labels : list of str
+        Namen der Investitionsbereiche.
+    method : str
+        Optimierungsmethode.
+    variation_percentage : float
+        Prozentuale Variation der Parameter.
+    **kwargs : dict
+        Zusätzliche Parameter an die Optimierungsmethode.
+
+    Returns:
+    -------
+    list or np.array
+        Optimale Investitionsallokation oder [np.nan]*n bei Fehlern.
+    """
+    try:
+        logging.info(f"Robustheitsanalyse Simulation {sim_index + 1} gestartet.")
+        # Zufällige Variation der Parameter um ±variation_percentage
+        a_sim = a * np.random.uniform(1 - variation_percentage, 1 + variation_percentage, size=a.shape)
+        # Dynamischer Mindestwert basierend auf ursprünglichem a
+        epsilon_a = 1e-6
+        a_sim = np.maximum(a_sim, epsilon_a)  # Verhindern kleiner oder negativer Effizienzparameter
+
+        b_sim = b * np.random.uniform(1 - variation_percentage, 1 + variation_percentage, size=b.shape)
+        b_sim = np.maximum(b_sim, 0)  # Verhindern negativer Synergieeffekte
+        # Symmetrisch machen unter Berücksichtigung der Diagonale
+        b_sim = np.triu(b_sim, 1) + np.triu(b_sim, 1).T
+        np.fill_diagonal(b_sim, 0)
+
+        # Überprüfung der Synergieeffekte
+        if not is_symmetric(b_sim):
+            logging.warning(f"Synergiematrix in Simulation {sim_index + 1} ist nicht symmetrisch. Korrigiere Symmetrie.")
+            b_sim = np.triu(b_sim, 1) + np.triu(b_sim, 1).T
+
+        # Erstellen eines neuen Optimizers mit variierten Parametern
+        try:
+            optimizer_sim = InvestmentOptimizer(
+                a=a_sim,
+                b=b_sim,
+                B=B,
+                L=L,
+                U=U,
+                x0=x0,
+                investment_labels=investment_labels,
+                log_level=logging.CRITICAL  # Minimieren der Log-Ausgabe in Simulationen
+            )
+        except ValueError as e:
+            logging.error(f"Validierungsfehler in Simulation {sim_index + 1}: {e}")
+            return [np.nan] * len(a)
+
+        # Optimierung durchführen
+        result = optimizer_sim.optimize(method=method, workers=1, **kwargs)
+        if result and result.success:
+            logging.info(f"Robustheitsanalyse Simulation {sim_index + 1} erfolgreich abgeschlossen.")
+            return result.x.tolist()
+        else:
+            logging.warning(f"Robustheitsanalyse Simulation {sim_index + 1} fehlgeschlagen oder kein Ergebnis verfügbar.")
+            return [np.nan] * len(a)
+    except Exception as e:
+        logging.error(f"Unerwarteter Fehler in Simulation {sim_index + 1}: {e}")
+        return [np.nan] * len(a)
 
 # ==========================
 # InvestmentOptimizer Klasse
@@ -285,12 +402,17 @@ class InvestmentOptimizer:
         Raises:
         ------
         ValueError
-            Bei inkonsistenten Eingaben.
+            Wenn inkonsistente Eingaben vorliegen.
         """
         if a is not None:
             self.a = np.array(a)
         if b is not None:
-            self.b = np.array(b)
+            b = np.array(b)
+            if not is_symmetric(b):
+                raise ValueError("Synergiematrix b muss symmetrisch sein.")
+            if np.any(b < 0):
+                raise ValueError("Alle Synergieeffekte b müssen größer oder gleich Null sein.")
+            self.b = b
         if B is not None:
             self.B = B
         if L is not None:
@@ -326,7 +448,35 @@ class InvestmentOptimizer:
             synergies = synergies[:top_n]
         return synergies
 
-    def optimize(self, method='SLSQP', max_retries=3, initial_penalty_factors=None, workers=None, adaptive_penalty=True, max_penalty=1e6, interactive_plot=False, **kwargs):
+    def objective_with_penalty(self, x, penalty_coeff=1e8):
+        """
+        Berechnet den negativen Gesamtnutzen mit Straftermen für Budgetabweichungen.
+
+        Parameters:
+        ----------
+        x : np.array
+            Investitionen in die Bereiche.
+        penalty_coeff : float, optional
+            Strafkoeffizient für Budgetabweichungen. Standard ist 1e8.
+
+        Returns:
+        -------
+        float
+            Negativer Gesamtnutzen mit Straftermen.
+        """
+        epsilon = 1e-6
+        x = np.maximum(x, epsilon)  # Verhindern von x_i <= 0
+        utility = np.sum(self.a * np.log(x))
+        synergy = compute_synergy(x, self.b)
+        utility += synergy
+
+        # Strafterm für Budgetabweichung
+        budget_diff = np.sum(x) - self.B
+        penalty_budget = penalty_coeff * (budget_diff ** 2)
+
+        return -utility + penalty_budget
+
+    def optimize(self, method='SLSQP', max_retries=3, workers=None, **kwargs):
         """
         Führt die Optimierung der Investitionsallokationen durch.
 
@@ -341,24 +491,14 @@ class InvestmentOptimizer:
             - 'SLSQP': Sequential Least Squares Programming
             - 'DE': Differential Evolution
             - 'BasinHopping': Basin Hopping
-            - 'COBYLA': Constrained Optimization BY Linear Approximations
             - 'TNC': Truncated Newton Conjugate-Gradient
             Weitere Methoden können durch Erweiterung der Optimierungsmethoden hinzugefügt werden.
             Standard ist 'SLSQP'.
         max_retries : int, optional
             Die maximale Anzahl an Wiederholungsversuchen bei Optimierungsfehlern. Standard ist 3.
-        initial_penalty_factors : dict, optional
-            Ein Wörterbuch mit initialen Straffaktoren für 'budget' und 'min'. Beispiel:
-            {'budget': 100, 'min': 100}. Standard ist {'budget': 100, 'min': 100}.
         workers : int, optional
             Die Anzahl der parallelen Worker für Methoden wie Differential Evolution. 
             Standard ist 1.
-        adaptive_penalty : bool, optional
-            Ob eine adaptive Anpassung der Straffaktoren verwendet werden soll. Standard ist True.
-        max_penalty : float, optional
-            Maximale Straffaktoren, um zu hohe Werte zu verhindern. Standard ist 1e6.
-        interactive_plot : bool, optional
-            Ob interaktive Plots verwendet werden sollen. Standard ist False.
         **kwargs : dict
             Zusätzliche Hyperparameter, die an die spezifische Optimierungsmethode weitergegeben werden.
 
@@ -373,56 +513,43 @@ class InvestmentOptimizer:
         ValueError
             Wenn eine nicht unterstützte Optimierungsmethode angegeben wird.
         """
-        if initial_penalty_factors is None:
-            penalty_factors = {'budget': 100, 'min': 100}  # Moderate Werte
-        else:
-            penalty_factors = copy.deepcopy(initial_penalty_factors)
-            penalty_factors.setdefault('budget', 100)
-            penalty_factors.setdefault('min', 100)
-
         bounds = get_bounds(self.L, self.U)
-        objective_fn = lambda x: objective_with_penalty(
-            x, self.a, self.b, self.B, self.L, penalty_factors
-        )
 
         optimization_methods = {
             'SLSQP': lambda: minimize(
-                objective_fn,
+                self.objective_with_penalty,
                 self.x0,
                 method='SLSQP',
                 bounds=bounds,
+                constraints=[
+                    {'type': 'eq', 'fun': lambda x: np.sum(x) - self.B}  # Summe(x) == B
+                ],
                 options={'disp': False, 'maxiter': 1000},
                 **kwargs
             ),
             'DE': lambda: differential_evolution(
-                objective_fn,
+                self.objective_with_penalty,
                 bounds,
                 strategy=kwargs.get('strategy', 'best1bin'),
                 maxiter=kwargs.get('maxiter', 1000),
-                tol=kwargs.get('tol', 1e-6),
+                tol=kwargs.get('tol', 1e-8),
                 updating='deferred',
                 workers=workers if workers is not None else 1,
                 polish=True,
                 init='latinhypercube'
             ),
             'BasinHopping': lambda: basinhopping(
-                objective_fn,
+                self.objective_with_penalty,
                 self.x0,
                 niter=kwargs.get('niter', 100),
                 stepsize=kwargs.get('stepsize', 0.5),
-                minimizer_kwargs={'method': 'SLSQP', 'bounds': bounds, 'options': {'maxiter': 1000}},
-                **kwargs
-            ),
-            'COBYLA': lambda: minimize(
-                objective_fn,
-                self.x0,
-                method='COBYLA',
-                constraints={'type': 'ineq', 'fun': lambda x: self.B - np.sum(x)},
-                options={'disp': False, 'maxiter': 1000},
+                minimizer_kwargs={'method': 'SLSQP', 'bounds': bounds, 'constraints': [
+                    {'type': 'eq', 'fun': lambda x: np.sum(x) - self.B}
+                ], 'options': {'maxiter': 1000, 'disp': False}},
                 **kwargs
             ),
             'TNC': lambda: minimize(
-                objective_fn,
+                self.objective_with_penalty,
                 self.x0,
                 method='TNC',
                 bounds=bounds,
@@ -442,21 +569,41 @@ class InvestmentOptimizer:
             result = None
             try:
                 optimization_result = optimization_methods[method]()
-                # Standardisieren der Ergebnisse
-                if method == 'DE':
-                    result = OptimizationResult(
-                        x=optimization_result.x,
-                        fun=optimization_result.fun,
-                        success=optimization_result.success,
-                        message=optimization_result.message
-                    )
+                if method == 'BasinHopping':
+                    # Bei BasinHopping ist das Ergebnis anders strukturiert
+                    x_opt = optimization_result.x
+                    fun_opt = optimization_result.fun
+                    success = optimization_result.lowest_optimization_result.success
+                    message = optimization_result.lowest_optimization_result.message
+                elif method == 'DE':
+                    x_opt = optimization_result.x
+                    fun_opt = optimization_result.fun
+                    success = optimization_result.success
+                    message = optimization_result.message if hasattr(optimization_result, 'message') else 'Optimierung abgeschlossen.'
                 else:
+                    x_opt = optimization_result.x
+                    fun_opt = optimization_result.fun
+                    success = optimization_result.success
+                    message = optimization_result.message if hasattr(optimization_result, 'message') else 'Optimierung abgeschlossen.'
+
+                # Überprüfung der Nebenbedingungen mit strengeren Toleranzen
+                constraints_satisfied = (
+                    np.isclose(np.sum(x_opt), self.B, atol=1e-8, rtol=1e-8) and
+                    np.all(x_opt >= self.L - 1e-8) and
+                    np.all(x_opt <= self.U + 1e-8)
+                )
+
+                if success and constraints_satisfied:
+                    logging.info(f"Optimierung mit {method} erfolgreich abgeschlossen beim Versuch {attempt}.")
                     result = OptimizationResult(
-                        x=optimization_result.x,
-                        fun=optimization_result.fun,
-                        success=optimization_result.success,
-                        message=optimization_result.message
+                        x=x_opt,
+                        fun=fun_opt,
+                        success=success,
+                        message=message
                     )
+                    return result
+                else:
+                    logging.warning(f"Optimierung mit {method} fehlgeschlagen beim Versuch {attempt}: {message}")
             except Exception as e:
                 logging.error(f"{method} Optimierungsfehler beim Versuch {attempt}: {e}")
                 result = OptimizationResult(
@@ -466,38 +613,10 @@ class InvestmentOptimizer:
                     message=str(e)
                 )
 
-            if result and getattr(result, 'success', False):
-                logging.info(f"Optimierung mit {method} erfolgreich abgeschlossen beim Versuch {attempt}.")
-                return result
-            else:
-                if result:
-                    logging.warning(f"Optimierung mit {method} fehlgeschlagen beim Versuch {attempt}: {getattr(result, 'message', 'Kein Ergebnis')}")
-                else:
-                    logging.warning(f"Optimierung mit {method} fehlgeschlagen beim Versuch {attempt}: Kein Ergebnis")
-
-                # Adaptive Anpassung der Straffaktoren basierend auf der Schwere der Verletzung
-                if adaptive_penalty:
-                    if result.x is not None:
-                        budget_violation = np.sum(result.x) - self.B
-                        min_violation = np.sum(np.maximum(self.L - result.x, 0))
-                    else:
-                        budget_violation = 0
-                        min_violation = 0
-                    if budget_violation > 0:
-                        penalty_factors['budget'] = min(penalty_factors['budget'] * 10, max_penalty)
-                    if min_violation > 0:
-                        penalty_factors['min'] = min(penalty_factors['min'] * 10, max_penalty)
-                    logging.info(f"Adaptive Erhöhung der Straffaktoren: budget={penalty_factors['budget']}, min={penalty_factors['min']}")
-                else:
-                    # Feste Multiplikation mit Begrenzung
-                    penalty_factors['budget'] = min(penalty_factors['budget'] * 10, max_penalty)
-                    penalty_factors['min'] = min(penalty_factors['min'] * 10, max_penalty)
-                    logging.info(f"Erhöhung der Straffaktoren: budget={penalty_factors['budget']}, min={penalty_factors['min']}")
-
         logging.error(f"Optimierung mit {method} nach {max_retries} Versuchen fehlgeschlagen.")
         return None
 
-    def sensitivity_analysis(self, B_values, method='SLSQP', **kwargs):
+    def sensitivity_analysis(self, B_values, method='SLSQP', tol=1e-6, **kwargs):
         """
         Führt eine Sensitivitätsanalyse durch, indem das Budget variiert und die optimale Allokation berechnet wird.
 
@@ -507,6 +626,8 @@ class InvestmentOptimizer:
             Verschiedene Budgetwerte.
         method : str, optional
             Optimierungsmethode. Standard ist 'SLSQP'.
+        tol : float, optional
+            Toleranz für die Validierung. Standard ist 1e-6.
         **kwargs : dict
             Zusätzliche Parameter an die Optimierungsmethode.
 
@@ -520,12 +641,18 @@ class InvestmentOptimizer:
 
         for B in B_values:
             logging.info(f"Durchführung der Optimierung für Budget B={B}...")
-            # Erstellen eines neuen Optimizers mit aktualisiertem Budget
-            optimizer_copy = copy.deepcopy(self)
-            optimizer_copy.B = B
-            optimizer_copy.x0 = adjust_initial_guess(optimizer_copy.x0, optimizer_copy.L, optimizer_copy.U, B)
             try:
-                validate_inputs(optimizer_copy.a, optimizer_copy.b, optimizer_copy.B, optimizer_copy.L, optimizer_copy.U, optimizer_copy.x0)
+                # Anpassen des Budgets und Anfangsschätzung
+                optimizer_copy = InvestmentOptimizer(
+                    a=self.a,
+                    b=self.b,
+                    B=B,
+                    L=self.L,
+                    U=self.U,
+                    x0=self.x0,
+                    investment_labels=self.investment_labels,
+                    log_level=logging.CRITICAL  # Minimieren der Log-Ausgabe in Sensitivitätsanalyse
+                )
             except ValueError as e:
                 logging.error(f"Validierungsfehler für Budget B={B}: {e}")
                 optimal_allocations.append([np.nan] * self.n)
@@ -569,55 +696,46 @@ class InvestmentOptimizer:
         pandas.DataFrame
             Zusammenfassung der Ergebnisse (median, std, min, max, 25%, 75% für jede Investition).
         """
-        def single_simulation(sim_index, base_optimizer, variation_percentage):
-            logging.info(f"Robustheitsanalyse Simulation {sim_index + 1}/{num_simulations}...")
-            # Zufällige Variation der Parameter um ±variation_percentage
-            a_sim = base_optimizer.a * np.random.uniform(1 - variation_percentage, 1 + variation_percentage, size=base_optimizer.a.shape)
-            b_sim = base_optimizer.b * np.random.uniform(1 - variation_percentage, 1 + variation_percentage, size=base_optimizer.b.shape)
-            b_sim = np.triu(b_sim, 1) + np.triu(b_sim, 1).T  # Symmetrisch
-            b_sim = np.maximum(b_sim, 0)  # Synergieeffekte nicht negativ
-
-            # Erstellen eines neuen Optimizers mit variierten Parametern
-            try:
-                optimizer_sim = InvestmentOptimizer(
-                    a=a_sim,
-                    b=b_sim,
-                    B=base_optimizer.B,
-                    L=base_optimizer.L,
-                    U=base_optimizer.U,
-                    x0=base_optimizer.x0,  # Keine deepcopy nötig, da x0 wird intern angepasst
-                    investment_labels=base_optimizer.investment_labels,
-                    log_level=logging.CRITICAL
-                )
-            except ValueError as e:
-                logging.error(f"Validierungsfehler in Simulation {sim_index + 1}: {e}")
-                return [np.nan] * base_optimizer.n
-
-            # Optimierung durchführen
-            result = optimizer_sim.optimize(method=method, workers=1, **kwargs)
-            if result and result.success:
-                allocation = result.x
-                return allocation
-            else:
-                return [np.nan] * base_optimizer.n
-
         results = []
-        base_optimizer = copy.deepcopy(self)
+        a = self.a
+        b = self.b
+        B = self.B
+        L = self.L
+        U = self.U
+        x0 = self.x0
+        investment_labels = self.investment_labels
 
         if parallel:
             if num_workers is None:
-                num_workers = os.cpu_count() or 1
-            with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
-                futures = [executor.submit(single_simulation, sim, base_optimizer, variation_percentage) for sim in range(num_simulations)]
-                for future in concurrent.futures.as_completed(futures):
-                    results.append(future.result())
+                num_workers = min(4, os.cpu_count() or 1)  # Begrenzung auf maximal 4 Worker
+            try:
+                with concurrent.futures.ProcessPoolExecutor(max_workers=num_workers) as executor:
+                    futures = [
+                        executor.submit(
+                            single_simulation, sim, a, b, B, L, U, x0,
+                            investment_labels, method, variation_percentage, **kwargs
+                        ) for sim in range(num_simulations)
+                    ]
+                    for future in concurrent.futures.as_completed(futures):
+                        try:
+                            result = future.result()
+                            results.append(result)
+                        except Exception as e:
+                            logging.error(f"Fehler in Simulation: {e}")
+                            results.append([np.nan] * len(a))
+            except Exception as e:
+                logging.error(f"Fehler bei der parallelen Verarbeitung: {e}")
+                logging.info("Wechsle zu sequenzieller Verarbeitung.")
+                for sim in range(num_simulations):
+                    results.append(single_simulation(sim, a, b, B, L, U, x0, investment_labels, method, variation_percentage, **kwargs))
         else:
             for sim in range(num_simulations):
-                results.append(single_simulation(sim, base_optimizer, variation_percentage))
+                results.append(single_simulation(sim, a, b, B, L, U, x0, investment_labels, method, variation_percentage, **kwargs))
 
         # Analysieren der Ergebnisse
-        df_results = pd.DataFrame(results, columns=self.investment_labels)
-        additional_stats = df_results.agg(['median', 'std', 'min', 'max', '25%', '75%']).transpose()
+        df_results = pd.DataFrame(results, columns=investment_labels)
+        # Verwendung von describe mit angepassten Perzentilen
+        additional_stats = df_results.describe(percentiles=[0.25, 0.75]).transpose()
         return additional_stats
 
     def plot_sensitivity(self, B_values, optimal_allocations, max_utilities, method='SLSQP', interactive=False):
@@ -635,57 +753,56 @@ class InvestmentOptimizer:
         method : str, optional
             Optimierungsmethode. Standard ist 'SLSQP'.
         interactive : bool, optional
-            Ob interaktive Plots genutzt werden sollen. Standard ist False.
+            Ob interaktive Plotly-Plots erstellt werden sollen. Standard ist False (Matplotlib).
         """
-        if interactive:
-            # Plotly nutzen für interaktive Plots
-            data_alloc = {label: [alloc[i] if not np.isnan(alloc[i]) else 0 for alloc in optimal_allocations]
-                         for i, label in enumerate(self.investment_labels)}
-            data_alloc['Budget'] = B_values
-            df_alloc = pd.DataFrame(data_alloc)
+        try:
+            if interactive:
+                # Plotly nutzen
+                df_alloc = pd.DataFrame(optimal_allocations, columns=self.investment_labels)
+                df_alloc['Budget'] = B_values
+                df_util = pd.DataFrame({'Budget': B_values, 'Maximaler Nutzen': max_utilities})
 
-            data_util = {
-                'Budget': B_values,
-                'Maximaler Nutzen': max_utilities
-            }
-            df_util = pd.DataFrame(data_util)
+                fig1 = px.line(df_alloc, x='Budget', y=self.investment_labels, title='Optimale Investitionsallokationen')
+                fig1.show()
 
-            fig1 = px.line(df_alloc, x='Budget', y=self.investment_labels, title='Optimale Investitionsallokationen')
-            fig1.add_traces(px.line(df_util, x='Budget', y='Maximaler Nutzen').data)
-            fig1.update_layout(yaxis_title='Investitionsbetrag / Nutzen', legend_title='Investitionsbereiche')
-            fig1.show()
-        else:
-            # Matplotlib nutzen für statische Plots
-            fig, ax1 = plt.subplots(figsize=(12, 8))
+                fig2 = px.line(df_util, x='Budget', y='Maximaler Nutzen', title='Maximaler Nutzen bei verschiedenen Budgets')
+                fig2.show()
+            else:
+                # Matplotlib nutzen
+                fig, ax1 = plt.subplots(figsize=(12, 8))
+                colors = sns.color_palette("tab10", n_colors=self.n)
 
-            colors = sns.color_palette("tab10", n_colors=self.n)
+                for i, label in enumerate(self.investment_labels):
+                    allocations = [alloc[i] if not np.isnan(alloc[i]) else 0 for alloc in optimal_allocations]
+                    ax1.plot(B_values, allocations, label=label, color=colors[i], alpha=0.7)
+                ax1.set_xlabel('Budget B')
+                ax1.set_ylabel('Investitionsbetrag x_i')
+                ax1.tick_params(axis='y')
+                ax1.legend(loc='upper left')
+                ax1.grid(True)
 
-            for i, label in enumerate(self.investment_labels):
-                allocations = [alloc[i] if not np.isnan(alloc[i]) else 0 for alloc in optimal_allocations]
-                ax1.plot(B_values, allocations, label=label, color=colors[i], alpha=0.7)
-            ax1.set_xlabel('Budget B')
-            ax1.set_ylabel('Investitionsbetrag x_i')
-            ax1.tick_params(axis='y')
-            ax1.legend(loc='upper left')
-            ax1.grid(True)
+                ax2 = ax1.twinx()
+                ax2.plot(B_values, max_utilities, label='Maximaler Nutzen', color='tab:red', marker='o')
+                ax2.set_ylabel('Maximaler Nutzen')
+                ax2.tick_params(axis='y')
+                ax2.legend(loc='upper right')
 
-            ax2 = ax1.twinx()
-            ax2.plot(B_values, max_utilities, label='Maximaler Nutzen', color='tab:red', marker='o')
-            ax2.set_ylabel('Maximaler Nutzen')
-            ax2.tick_params(axis='y')
-            ax2.legend(loc='upper right')
-
-            plt.title(f'Optimale Investitionsallokation und Nutzen bei verschiedenen Budgets ({method})')
-            plt.show()
+                plt.title(f'Optimale Investitionsallokation und Nutzen bei verschiedenen Budgets ({method})')
+                plt.show()
+        except Exception as e:
+            logging.error(f"Fehler beim Plotten der Sensitivitätsanalyse: {e}")
 
     def plot_synergy_heatmap(self):
         """
         Plotet eine Heatmap der Synergieeffekte.
         """
-        plt.figure(figsize=(8, 6))
-        sns.heatmap(self.b, annot=True, xticklabels=self.investment_labels, yticklabels=self.investment_labels, cmap='viridis')
-        plt.title('Heatmap der Synergieeffekte')
-        plt.show()
+        try:
+            plt.figure(figsize=(8, 6))
+            sns.heatmap(self.b, annot=True, xticklabels=self.investment_labels, yticklabels=self.investment_labels, cmap='viridis')
+            plt.title('Heatmap der Synergieeffekte')
+            plt.show()
+        except Exception as e:
+            logging.error(f"Fehler beim Plotten der Synergie-Heatmap: {e}")
 
     def plot_parameter_sensitivity(self, parameter_values, parameter_name, parameter_index=None, method='SLSQP', interactive=False, **kwargs):
         """
@@ -703,7 +820,7 @@ class InvestmentOptimizer:
         method : str, optional
             Optimierungsmethode. Standard ist 'SLSQP'.
         interactive : bool, optional
-            Ob interaktive Plots genutzt werden sollen. Standard ist False.
+            Ob interaktive Plotly-Plots erstellt werden sollen. Standard ist False (Matplotlib).
         **kwargs : dict
             Zusätzliche Parameter an die Optimierungsmethode.
         """
@@ -711,48 +828,84 @@ class InvestmentOptimizer:
         allocations = []
 
         for value in parameter_values:
-            optimizer_copy = copy.deepcopy(self)
-            if parameter_name == 'a':
-                if not isinstance(parameter_index, int):
-                    raise ValueError("Für Parameter 'a' muss parameter_index ein int sein.")
-                a_new = optimizer_copy.a.copy()
-                a_new[parameter_index] = value
-                optimizer_copy.update_parameters(a=a_new)
-            elif parameter_name == 'b':
-                if not (isinstance(parameter_index, tuple) and len(parameter_index) == 2):
-                    raise ValueError("Für Parameter 'b' muss parameter_index ein tuple mit zwei Indizes sein, z.B. (0,1).")
-                i, j = parameter_index
-                b_new = optimizer_copy.b.copy()
-                b_new[i, j] = value
-                b_new[j, i] = value  # Symmetrisch
-                optimizer_copy.update_parameters(b=b_new)
-            else:
-                logging.error(f"Parametername '{parameter_name}' wird nicht unterstützt für Sensitivitätsanalyse.")
-                return
+            try:
+                optimizer_copy = InvestmentOptimizer(
+                    a=self.a.copy(),
+                    b=self.b.copy(),
+                    B=self.B,
+                    L=self.L.copy(),
+                    U=self.U.copy(),
+                    x0=self.x0.copy(),
+                    investment_labels=self.investment_labels,
+                    log_level=logging.CRITICAL  # Minimieren der Log-Ausgabe
+                )
+                if parameter_name == 'a':
+                    if not isinstance(parameter_index, int):
+                        raise ValueError("Für Parameter 'a' muss parameter_index ein int sein.")
+                    epsilon_a = 1e-6
+                    if value <= epsilon_a:
+                        raise ValueError(f"Effizienzparameter a muss größer als {epsilon_a} sein.")
+                    a_new = optimizer_copy.a.copy()
+                    a_new[parameter_index] = value
+                    optimizer_copy.update_parameters(a=a_new)
+                elif parameter_name == 'b':
+                    if not (isinstance(parameter_index, tuple) and len(parameter_index) == 2):
+                        raise ValueError("Für Parameter 'b' muss parameter_index ein tuple mit zwei Indizes sein, z.B. (0,1).")
+                    if value < 0:
+                        raise ValueError("Synergieeffekte b müssen größer oder gleich Null sein.")
+                    i, j = parameter_index
+                    b_new = optimizer_copy.b.copy()
+                    b_new[i, j] = value
+                    b_new[j, i] = value  # Symmetrisch
+                    optimizer_copy.update_parameters(b=b_new)
+                else:
+                    logging.error(f"Parametername '{parameter_name}' wird nicht unterstützt für Sensitivitätsanalyse.")
+                    return
 
-            result = optimizer_copy.optimize(method=method, **kwargs)
-            if result and result.success:
-                utilities.append(-result.fun)
-                allocations.append(result.x)
-            else:
+                result = optimizer_copy.optimize(method=method, **kwargs)
+                if result and result.success:
+                    utilities.append(-result.fun)
+                    allocations.append(result.x)
+                else:
+                    utilities.append(np.nan)
+                    allocations.append([np.nan] * self.n)
+            except Exception as e:
+                logging.error(f"Fehler bei der Sensitivitätsanalyse für Wert {value}: {e}")
                 utilities.append(np.nan)
                 allocations.append([np.nan] * self.n)
 
-        if interactive:
-            # Plotly nutzen für interaktive Plots
-            plt.figure(figsize=(10, 6))
-            fig = px.line(x=parameter_values, y=utilities, labels={'x': f'{parameter_name}{parameter_index if parameter_index is not None else ""}', 'y': 'Maximaler Nutzen'},
-                          title=f'Sensitivität des Nutzens gegenüber {parameter_name}{parameter_index if parameter_index is not None else ""}')
-            fig.show()
-        else:
-            # Matplotlib nutzen für statische Plots
-            plt.figure(figsize=(10, 6))
-            plt.plot(parameter_values, utilities, marker='o')
-            plt.xlabel(f'{parameter_name}{parameter_index if parameter_index is not None else ""}')
-            plt.ylabel('Maximaler Nutzen')
-            plt.title(f'Sensitivität des Nutzens gegenüber {parameter_name}{parameter_index if parameter_index is not None else ""}')
-            plt.grid(True)
-            plt.show()
+        try:
+            if interactive:
+                # Plotly nutzen
+                if parameter_name == 'a':
+                    xlabel = f'a[{parameter_index}]'
+                elif parameter_name == 'b':
+                    xlabel = f'b[{parameter_index[0]},{parameter_index[1]}]'
+                else:
+                    xlabel = parameter_name
+
+                df_util = pd.DataFrame({'Parameter Value': parameter_values, 'Maximaler Nutzen': utilities})
+                fig = px.line(df_util, x='Parameter Value', y='Maximaler Nutzen',
+                              title=f'Sensitivität des Nutzens gegenüber {xlabel}')
+                fig.show()
+            else:
+                # Matplotlib nutzen
+                if parameter_name == 'a':
+                    xlabel = f'a[{parameter_index}]'
+                elif parameter_name == 'b':
+                    xlabel = f'b[{parameter_index[0]},{parameter_index[1]}]'
+                else:
+                    xlabel = parameter_name
+
+                plt.figure(figsize=(10, 6))
+                plt.plot(parameter_values, utilities, marker='o')
+                plt.xlabel(xlabel)
+                plt.ylabel('Maximaler Nutzen')
+                plt.title(f'Sensitivität des Nutzens gegenüber {xlabel}')
+                plt.grid(True)
+                plt.show()
+        except Exception as e:
+            logging.error(f"Fehler beim Plotten der Parameter-Sensitivität: {e}")
 
     def plot_interactive_sensitivity(self, B_values, optimal_allocations, max_utilities, method='SLSQP'):
         """
@@ -769,20 +922,23 @@ class InvestmentOptimizer:
         method : str, optional
             Optimierungsmethode. Standard ist 'SLSQP'.
         """
-        # Erstellen eines DataFrames
-        data = {'Budget': B_values}
-        for i, label in enumerate(self.investment_labels):
-            data[label] = [alloc[i] if not np.isnan(alloc[i]) else 0 for alloc in optimal_allocations]
-        data['Maximaler Nutzen'] = max_utilities
-        df = pd.DataFrame(data)
+        try:
+            # Erstellen eines DataFrames
+            data = {'Budget': B_values}
+            for i, label in enumerate(self.investment_labels):
+                data[label] = [alloc[i] if not np.isnan(alloc[i]) else 0 for alloc in optimal_allocations]
+            data['Maximaler Nutzen'] = max_utilities
+            df = pd.DataFrame(data)
 
-        # Plot für Investitionsallokationen
-        fig1 = px.line(df, x='Budget', y=self.investment_labels, title='Optimale Investitionsallokationen')
-        fig1.show()
+            # Plot für Investitionsallokationen
+            fig1 = px.line(df, x='Budget', y=self.investment_labels, title='Optimale Investitionsallokationen')
+            fig1.show()
 
-        # Plot für maximalen Nutzen
-        fig2 = px.scatter(df, x='Budget', y='Maximaler Nutzen', title='Maximaler Nutzen bei verschiedenen Budgets')
-        fig2.show()
+            # Plot für maximalen Nutzen
+            fig2 = px.scatter(df, x='Budget', y='Maximaler Nutzen', title='Maximaler Nutzen bei verschiedenen Budgets')
+            fig2.show()
+        except Exception as e:
+            logging.error(f"Fehler beim Erstellen des interaktiven Sensitivitäts-Dashboards: {e}")
 
     def plot_robustness_analysis(self, df_results):
         """
@@ -793,25 +949,37 @@ class InvestmentOptimizer:
         df_results : pandas.DataFrame
             Ergebnisse der Robustheitsanalyse.
         """
-        # Boxplot
-        df_melted = df_results.reset_index(drop=True).melt(var_name='Bereich', value_name='Investition')
-        plt.figure(figsize=(12, 8))
-        sns.boxplot(x='Bereich', y='Investition', data=df_melted)
-        plt.xlabel('Investitionsbereich')
-        plt.ylabel('Investitionsbetrag')
-        plt.title('Verteilung der Investitionsallokationen aus der Robustheitsanalyse')
-        plt.show()
+        try:
+            # Entfernen von NaN-Werten und Informieren über Anzahl der fehlgeschlagenen Simulationen
+            num_failed = df_results.isna().any(axis=1).sum()
+            if num_failed > 0:
+                logging.warning(f"{num_failed} Simulationen sind fehlgeschlagen und werden in den Plots ausgeschlossen.")
+            df_clean = df_results.dropna()
+            if df_clean.empty:
+                logging.warning("Keine gültigen Daten zum Plotten vorhanden.")
+                return
 
-        # Histogramme mit KDE
-        g = sns.FacetGrid(df_melted, col="Bereich", col_wrap=4, sharex=False, sharey=False)
-        g.map(sns.histplot, "Investition", kde=True, bins=20, color='skyblue')
-        g.fig.suptitle('Histogramme der Investitionsallokationen', y=1.02)
-        plt.show()
+            # Boxplot
+            df_melted = df_clean.reset_index(drop=True).melt(var_name='Bereich', value_name='Investition')
+            plt.figure(figsize=(12, 8))
+            sns.boxplot(x='Bereich', y='Investition', data=df_melted)
+            plt.xlabel('Investitionsbereich')
+            plt.ylabel('Investitionsbetrag')
+            plt.title('Verteilung der Investitionsallokationen aus der Robustheitsanalyse')
+            plt.show()
 
-        # Scatter-Plots zur Identifikation von Korrelationen zwischen Bereichen
-        sns.pairplot(df_results.dropna())
-        plt.suptitle('Scatter-Plots der Investitionsallokationen', y=1.02)
-        plt.show()
+            # Histogramme mit KDE
+            g = sns.FacetGrid(df_melted, col="Bereich", col_wrap=4, sharex=False, sharey=False)
+            g.map(sns.histplot, "Investition", kde=True, bins=20, color='skyblue')
+            g.fig.suptitle('Histogramme der Investitionsallokationen', y=1.02)
+            plt.show()
+
+            # Scatter-Plots zur Identifikation von Korrelationen zwischen Bereichen
+            sns.pairplot(df_clean)
+            plt.suptitle('Scatter-Plots der Investitionsallokationen', y=1.02)
+            plt.show()
+        except Exception as e:
+            logging.error(f"Fehler beim Plotten der Robustheitsanalyse: {e}")
 
     def plot_additional_synergy_heatmap(self):
         """
@@ -819,92 +987,15 @@ class InvestmentOptimizer:
         """
         self.plot_synergy_heatmap()
 
-
-# ==========================
-# Hilfsfunktionen für die Anpassung der Anfangsschätzung
-# ==========================
-def adjust_initial_guess(x0, L, U, B):
-    """
-    Passt die Anfangsschätzung an, um die Nebenbedingungen zu erfüllen, mittels linearer Programmierung.
-
-    Parameters:
-    ----------
-    x0 : np.array
-        Ursprüngliche Anfangsschätzung.
-    L : np.array
-        Mindestinvestitionen.
-    U : np.array
-        Höchste Investitionen.
-    B : float
-        Gesamtbudget.
-
-    Returns:
-    -------
-    np.array
-        Angepasste Anfangsschätzung.
-    """
-    n = len(x0)
-    # Ziel: Minimierung der Abweichung von x0
-    c = np.ones(n)
-    A_eq = [np.ones(n)]
-    b_eq = [B]
-    bounds = [(L[i], U[i]) for i in range(n)]
-
-    res = linprog(c, A_eq=A_eq, b_eq=b_eq, bounds=bounds, method='highs')
-
-    if res.success:
-        return res.x
-    else:
-        logging.warning("Lineare Programmierung zur Anpassung der Anfangsschätzung fehlgeschlagen. Verwende Heuristik.")
-        # Fallback: ursprüngliche Heuristik
-        x0 = np.clip(x0, L, U)
-        total = np.sum(x0)
-        if total > B:
-            scaling_factor = B / total
-            x0 = x0 * scaling_factor
-        elif total < B:
-            deficit = B - np.sum(x0)
-            while deficit > 1e-6:
-                increment = deficit / len(x0)
-                new_x0 = np.minimum(x0 + increment, U)
-                actual_increment = np.sum(new_x0 - x0)
-                x0 = new_x0
-                deficit = B - np.sum(x0)
-                if actual_increment == 0:
-                    break
-        return x0
-
-
-# ==========================
-# OptimizationResult Klasse
-# ==========================
-class OptimizationResult:
-    def __init__(self, x, fun, success, message, **kwargs):
-        self.x = x
-        self.fun = fun
-        self.success = success
-        self.message = message
-        for key, value in kwargs.items():
-            setattr(self, key, value)
-
-
 # ==========================
 # Hauptfunktion
 # ==========================
 def parse_arguments():
-    """
-    Parst die Kommandozeilenargumente.
-
-    Returns:
-    -------
-    argparse.Namespace
-        Geparste Argumente.
-    """
     parser = argparse.ArgumentParser(description='Investment Optimizer')
     parser.add_argument('--config', type=str, help='Pfad zur Konfigurationsdatei (JSON)')
-    parser.add_argument('--interactive_plot', action='store_true', help='Verwende interaktive Plots')
+    parser.add_argument('--interactive', action='store_true', help='Verwenden Sie interaktive Plotly-Plots')
+    # Weitere Argumente können hinzugefügt werden
     return parser.parse_args()
-
 
 def main():
     """
@@ -912,15 +1003,30 @@ def main():
     """
     args = parse_arguments()
     if args.config:
-        with open(args.config, 'r') as f:
-            config = json.load(f)
-        investment_labels = config.get('investment_labels', [f'Bereich_{i}' for i in range(len(config['a']))])
-        a = np.array(config['a'])
-        b = np.array(config['b'])
-        B = config['B']
-        L = np.array(config['L'])
-        U = np.array(config['U'])
-        x0 = np.array(config['x0'])
+        try:
+            with open(args.config, 'r') as f:
+                config = json.load(f)
+            # Überprüfung, ob alle notwendigen Schlüssel vorhanden sind
+            required_keys = ['a', 'b', 'B', 'L', 'U', 'x0']
+            for key in required_keys:
+                if key not in config:
+                    raise KeyError(f"Schlüssel '{key}' fehlt in der Konfigurationsdatei.")
+            investment_labels = config.get('investment_labels', [f'Bereich_{i}' for i in range(len(config['a']))])
+            a = np.array(config['a'])
+            b = np.array(config['b'])
+            B = config['B']
+            L = np.array(config['L'])
+            U = np.array(config['U'])
+            x0 = np.array(config['x0'])
+        except KeyError as e:
+            logging.error(f"Fehlender Schlüssel in der Konfigurationsdatei: {e}")
+            sys.exit(1)
+        except json.JSONDecodeError as e:
+            logging.error(f"Fehler beim Parsen der JSON-Konfigurationsdatei: {e}")
+            sys.exit(1)
+        except Exception as e:
+            logging.error(f"Fehler beim Laden der Konfigurationsdatei: {e}")
+            sys.exit(1)
     else:
         # Standard-Beispielparameter
         investment_labels = ['F&E', 'Marketing', 'Vertrieb', 'Kundenservice']
@@ -938,38 +1044,42 @@ def main():
         x0 = np.array([2, 2, 2, 4])  # Anfangsschätzung
 
     # Initialisieren des Optimizers mit DEBUG-Logging (kann angepasst werden)
-    optimizer = InvestmentOptimizer(a, b, B, L, U, x0, investment_labels=investment_labels, log_level=logging.DEBUG)
+    try:
+        optimizer = InvestmentOptimizer(a, b, B, L, U, x0, investment_labels=investment_labels, log_level=logging.DEBUG)
+    except ValueError as e:
+        logging.error(f"Initialisierungsfehler: {e}")
+        sys.exit(1)
 
     # Optimierung mit SLSQP
-    result_slsqp = optimizer.optimize(method='SLSQP', interactive_plot=args.interactive_plot)
+    result_slsqp = optimizer.optimize(method='SLSQP')
 
     # Optimierung mit Differential Evolution (globale Optimierung)
-    result_de = optimizer.optimize(method='DE', workers=2, interactive_plot=args.interactive_plot)  # Beispiel: 2 Worker
+    result_de = optimizer.optimize(method='DE', workers=2)  # Beispiel: 2 Worker
 
     # Ergebnisse anzeigen
     print("Optimierung mit SLSQP:")
-    if result_slsqp and result_slsqp.success:
+    if result_slsqp is not None and result_slsqp.success:
         print("Optimale Allokation:", result_slsqp.x)
         print("Maximaler Nutzen:", -result_slsqp.fun)
     else:
         print("Optimierung fehlgeschlagen oder kein Ergebnis verfügbar.")
 
     print("\nOptimierung mit Differential Evolution:")
-    if result_de and result_de.success:
+    if result_de is not None and result_de.success:
         print("Optimale Allokation:", result_de.x)
         print("Maximaler Nutzen:", -result_de.fun)
     else:
         print("Optimierung fehlgeschlagen oder kein Ergebnis verfügbar.")
 
     # Sensitivitätsanalyse: Variation des Budgets
-    B_values = np.linspace(5, 20, 16)  # Budget von 5 bis 20 in Schritten von 1
+    B_values = np.arange(5, 21, 1)  # Budget von 5 bis 20 in Schritten von 1
     B_sens, allocations_sens, utilities_sens = optimizer.sensitivity_analysis(
         B_values, method='SLSQP'
     )
-    optimizer.plot_sensitivity(B_sens, allocations_sens, utilities_sens, method='SLSQP', interactive=args.interactive_plot)
+    optimizer.plot_sensitivity(B_sens, allocations_sens, utilities_sens, method='SLSQP', interactive=args.interactive)
 
     # Optional: Interaktive Sensitivitätsdiagramme
-    # optimizer.plot_interactive_sensitivity(B_values, allocations_sens, utilities_sens, method='SLSQP')
+    # optimizer.plot_interactive_sensitivity(B_sens, allocations_sens, utilities_sens, method='SLSQP')
 
     # Identifizierung der wichtigsten Synergieeffekte
     top_synergies = optimizer.identify_top_synergies(top_n=6)
@@ -991,12 +1101,11 @@ def main():
     # Beispiel für eine Sensitivitätsanalyse eines einzelnen Parameters
     parameter_values = np.linspace(1, 5, 10)
     # Sensitivität des ersten Effizienzparameters a[0]
-    optimizer.plot_parameter_sensitivity(parameter_values, 'a', parameter_index=0, method='SLSQP', interactive=args.interactive_plot)
+    optimizer.plot_parameter_sensitivity(parameter_values, 'a', parameter_index=0, method='SLSQP', interactive=args.interactive)
     # Sensitivität des Synergieelements b[0,1]
-    optimizer.plot_parameter_sensitivity(parameter_values, 'b', parameter_index=(0,1), method='SLSQP', interactive=args.interactive_plot)
+    optimizer.plot_parameter_sensitivity(parameter_values, 'b', parameter_index=(0, 1), method='SLSQP', interactive=args.interactive)
 
     # Weitere Visualisierungen können hier hinzugefügt werden
-
 
 # ==========================
 # Ausführung des Skripts
