@@ -1,4 +1,4 @@
-# FoundersAlloc a Resource Allocation Framework
+# InvestAlloc a Resource Allocation Framework
 
 ![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
 
@@ -39,8 +39,8 @@ The **Resource Allocation Framework** is a Python-based tool designed to optimiz
 1. **Clone the Repository**
 
    ```bash
-   git clone https://github.com/zeynel/FoundersAlloc.git
-   cd FoundersAlloc
+   git clone https://github.com/zeynel/InvestAlloc.git
+   cd InvestAlloc
    ```
 
 2. **Create a Virtual Environment (Optional but Recommended)**
