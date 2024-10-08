@@ -346,7 +346,7 @@ def single_simulation(sim_index, a, b, B, L, U, x0, investment_labels, method, v
 # InvestmentOptimizer Klasse
 # ==========================
 class InvestmentOptimizer:
-    def __init__(self, a, b, B, L, U, x0, investment_labels=None, log_level=logging.INFO):
+    def __init__(self, a, b, B, L, U, x0, investment_labels=None, log_level=logging.INFO, c=None):
         """
         Initialisiert das InvestmentOptimizer Objekt.
 
@@ -368,6 +368,8 @@ class InvestmentOptimizer:
             Namen der Investitionsbereiche. Standard ist ['Bereich_0', 'Bereich_1', ...].
         log_level : int, optional
             Logging-Level. Standard ist logging.INFO.
+        c : np.array, optional
+            Parameter für quadratische Nutzenfunktion (abnehmende Grenzerträge).
         """
         configure_logging(log_level)
         self.a = np.array(a)
@@ -378,9 +380,10 @@ class InvestmentOptimizer:
         self.n = len(a)
         self.investment_labels = investment_labels if investment_labels else [f'Bereich_{i}' for i in range(self.n)]
         self.x0 = adjust_initial_guess(x0, self.L, self.U, self.B)
+        self.c = np.array(c) if c is not None else None  # Optionaler Parameter für quadratische Nutzenfunktion
         validate_inputs(self.a, self.b, self.B, self.L, self.U, self.x0)
 
-    def update_parameters(self, a=None, b=None, B=None, L=None, U=None, x0=None):
+    def update_parameters(self, a=None, b=None, B=None, L=None, U=None, x0=None, c=None):
         """
         Aktualisiert die Parameter des Optimizers.
 
@@ -395,10 +398,12 @@ class InvestmentOptimizer:
         L : np.array, optional
             Neue Mindestinvestitionen.
         U : np.array, optional
-            Neue Höchste Investitionen.
+            Neue Höchsteinvestitionen.
         x0 : np.array, optional
             Neue Anfangsschätzung.
-
+        c : np.array, optional
+            Neuer Parameter für quadratische Nutzenfunktion.
+        
         Raises:
         ------
         ValueError
@@ -421,6 +426,8 @@ class InvestmentOptimizer:
             self.U = np.array(U)
         if x0 is not None:
             self.x0 = adjust_initial_guess(x0, self.L, self.U, self.B)
+        if c is not None:
+            self.c = np.array(c)
         validate_inputs(self.a, self.b, self.B, self.L, self.U, self.x0)
 
     def identify_top_synergies(self, top_n=None):
@@ -464,17 +471,24 @@ class InvestmentOptimizer:
         float
             Negativer Gesamtnutzen mit Straftermen.
         """
-        epsilon = 1e-6
-        x = np.maximum(x, epsilon)  # Verhindern von x_i <= 0
-        utility = np.sum(self.a * np.log(x))
+        # Berechnung des individuellen Nutzens
+        if self.c is not None:
+            utility = np.sum(self.a * x - 0.5 * self.c * x**2)
+        else:
+            utility = np.sum(self.a * np.log(x))
+        
+        # Berechnung der Synergieeffekte
         synergy = compute_synergy(x, self.b)
-        utility += synergy
+        
+        # Gesamtnutzen
+        total_utility = utility + synergy
 
-        # Strafterm für Budgetabweichung
+        # Strafterm für Budgetabweichung (optional, wenn nicht strikt als Gleichung verwendet)
         budget_diff = np.sum(x) - self.B
         penalty_budget = penalty_coeff * (budget_diff ** 2)
 
-        return -utility + penalty_budget
+        # Negative Nutzen für Minimierung
+        return -total_utility + penalty_budget
 
     def optimize(self, method='SLSQP', max_retries=3, workers=None, **kwargs):
         """
@@ -525,7 +539,7 @@ class InvestmentOptimizer:
                     {'type': 'eq', 'fun': lambda x: np.sum(x) - self.B}  # Summe(x) == B
                 ],
                 options={'disp': False, 'maxiter': 1000},
-                **kwargs
+                args=(1e8,)  # penalty_coeff
             ),
             'DE': lambda: differential_evolution(
                 self.objective_with_penalty,
@@ -536,7 +550,8 @@ class InvestmentOptimizer:
                 updating='deferred',
                 workers=workers if workers is not None else 1,
                 polish=True,
-                init='latinhypercube'
+                init='latinhypercube',
+                args=(1e8,)
             ),
             'BasinHopping': lambda: basinhopping(
                 self.objective_with_penalty,
@@ -546,7 +561,9 @@ class InvestmentOptimizer:
                 minimizer_kwargs={'method': 'SLSQP', 'bounds': bounds, 'constraints': [
                     {'type': 'eq', 'fun': lambda x: np.sum(x) - self.B}
                 ], 'options': {'maxiter': 1000, 'disp': False}},
-                **kwargs
+                stepsize=kwargs.get('stepsize', 0.5),
+                T=kwargs.get('T', 1.0),
+                niter_success=kwargs.get('niter_success', 10)
             ),
             'TNC': lambda: minimize(
                 self.objective_with_penalty,
@@ -554,7 +571,7 @@ class InvestmentOptimizer:
                 method='TNC',
                 bounds=bounds,
                 options={'disp': False, 'maxiter': 1000},
-                **kwargs
+                args=(1e8,)
             )
             # Weitere Methoden können hier hinzugefügt werden
         }
@@ -1018,6 +1035,7 @@ def main():
             L = np.array(config['L'])
             U = np.array(config['U'])
             x0 = np.array(config['x0'])
+            c = np.array(config['c']) if 'c' in config else None  # Optionaler Parameter für quadratische Nutzenfunktion
         except KeyError as e:
             logging.error(f"Fehlender Schlüssel in der Konfigurationsdatei: {e}")
             sys.exit(1)
@@ -1042,10 +1060,11 @@ def main():
         L = np.array([1] * n)  # Mindestinvestitionen
         U = np.array([5] * n)  # Höchste Investitionen
         x0 = np.array([2, 2, 2, 4])  # Anfangsschätzung
+        c = np.array([0.1, 0.1, 0.1, 0.1])  # Beispielwerte für quadratische Nutzenfunktion
 
     # Initialisieren des Optimizers mit DEBUG-Logging (kann angepasst werden)
     try:
-        optimizer = InvestmentOptimizer(a, b, B, L, U, x0, investment_labels=investment_labels, log_level=logging.DEBUG)
+        optimizer = InvestmentOptimizer(a, b, B, L, U, x0, investment_labels=investment_labels, log_level=logging.DEBUG, c=c)
     except ValueError as e:
         logging.error(f"Initialisierungsfehler: {e}")
         sys.exit(1)
