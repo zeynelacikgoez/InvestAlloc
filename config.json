@@ -1,15 +1,51 @@
 {
     "investment_labels": ["F&E", "Marketing", "Vertrieb", "Kundenservice"],
-    "roi_factors": [1, 2, 3, 4],
+    "roi_factors": [1.5, 2.0, 2.5, 1.8],
     "synergy_matrix": [
-        [0, 0.1, 0.2, 0.3],
-        [0.1, 0, 0.4, 0.5],
-        [0.2, 0.4, 0, 0.6],
-        [0.3, 0.5, 0.6, 0]
+        [0.0, 0.1, 0.15, 0.05],
+        [0.1, 0.0, 0.2,  0.1 ],
+        [0.15, 0.2, 0.0,  0.25],
+        [0.05, 0.1, 0.25, 0.0 ]
     ],
-    "total_budget": 10.0,
-    "lower_bounds": [1, 1, 1, 1],
-    "upper_bounds": [5, 5, 5, 5],
-    "initial_allocation": [2, 2, 2, 4],
-    "c": [0.1, 0.1, 0.1, 0.1]
+    "total_budget": 100.0,
+    "lower_bounds": [10, 10, 10, 10],
+    "upper_bounds": [50, 50, 50, 50],
+    "initial_allocation": [25, 25, 25, 25],
+
+    "utility_function_type": "log", // Optionen: "log", "quadratic", "s_curve"
+
+    // Parameter für "quadratic" (nur relevant, wenn utility_function_type = "quadratic")
+    // Wenn null oder nicht vorhanden, wird 'c' ignoriert oder Fehler (falls quadratic gewählt)
+    "c": [0.01, 0.015, 0.02, 0.01],
+
+    // Parameter für "s_curve" (nur relevant, wenn utility_function_type = "s_curve")
+    // Wenn null oder nicht vorhanden, werden S-Kurven ignoriert oder Fehler (falls s_curve gewählt)
+    "s_curve_L": null, // [100, 120, 150, 110],   // Beispiel: Max-Werte
+    "s_curve_k": null, // [0.2, 0.2, 0.15, 0.25], // Beispiel: Steilheit
+    "s_curve_x0": null, // [20, 25, 30, 22],      // Beispiel: Mittelpunkte
+
+    "analysis_parameters": {
+        "sensitivity_num_steps": 15,
+        "sensitivity_budget_min_factor": 0.7,
+        "sensitivity_budget_max_factor": 1.5,
+
+        "robustness_num_simulations": 200,
+        "robustness_variation_percentage": 0.15,
+        "robustness_num_workers_factor": 4,
+
+        "parameter_sensitivity_num_steps": 11,
+        "parameter_sensitivity_min_factor": 0.5,
+        "parameter_sensitivity_max_factor": 1.5,
+
+        "de_maxiter": 1500,
+        "de_popsize": 20,
+
+        "multi_criteria_weights": {
+            "alpha": 0.6,
+            "beta": 0.2,
+            "gamma": 0.2
+        },
+
+        "pareto_num_samples": 50
+    }
 }
