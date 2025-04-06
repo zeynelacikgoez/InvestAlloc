@@ -12,17 +12,13 @@
     "upper_bounds": [50, 50, 50, 50],
     "initial_allocation": [25, 25, 25, 25],
 
-    "utility_function_type": "log", // Optionen: "log", "quadratic", "s_curve"
+    "utility_function_type": "log",
 
-    // Parameter für "quadratic" (nur relevant, wenn utility_function_type = "quadratic")
-    // Wenn null oder nicht vorhanden, wird 'c' ignoriert oder Fehler (falls quadratic gewählt)
     "c": [0.01, 0.015, 0.02, 0.01],
 
-    // Parameter für "s_curve" (nur relevant, wenn utility_function_type = "s_curve")
-    // Wenn null oder nicht vorhanden, werden S-Kurven ignoriert oder Fehler (falls s_curve gewählt)
-    "s_curve_L": null, // [100, 120, 150, 110],   // Beispiel: Max-Werte
-    "s_curve_k": null, // [0.2, 0.2, 0.15, 0.25], // Beispiel: Steilheit
-    "s_curve_x0": null, // [20, 25, 30, 22],      // Beispiel: Mittelpunkte
+    "s_curve_L": null,
+    "s_curve_k": null,
+    "s_curve_x0": null,
 
     "analysis_parameters": {
         "sensitivity_num_steps": 15,
