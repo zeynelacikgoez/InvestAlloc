@@ -1696,10 +1696,24 @@ def main():
     # --- Pareto-Front Approximation ---
     print("\n" + "=" * 30 + "\n=== Pareto-Front Approximation ===")
     pareto_results_df = pd.DataFrame() # Initialize empty DataFrame
-    # Define Risk and Sustainability functions (can be customized)
+
+    # --- WICHTIG: Benutzerdefinierte Zielfunktionen ---
+    # Die folgenden Funktionen für "Risk" und "Sustainability" sind Beispiele.
+    # Die Stärke des Frameworks liegt darin, dass Sie hier Ihre eigenen,
+    # domänenspezifischen Definitionen einsetzen können.
+    # Jede Funktion muss den Allokationsvektor 'x' als NumPy-Array akzeptieren
+    # und einen einzelnen Float-Wert zurückgeben.
+    #
+    # Beispiel-Definitionen:
+    # - Risk: Varianz der Allokation. Höher ist schlechter.
+    # - Sustainability: Nähe zu einer Gleichverteilung. Höher ist besser.
+
     # Example: Risk as variance, Sustainability as negative squared deviation from mean (encourages equal distribution)
     def risk_func_main(x): return np.var(x)
-    def sustainability_func_main(x): n = len(x); mean = np.mean(x) if n > 0 else 0; return -np.sum((x - mean)**2) if n > 0 else 0
+    def sustainability_func_main(x):
+        n = len(x)
+        mean = np.mean(x) if n > 0 else 0
+        return -np.sum((x - mean) ** 2) if n > 0 else 0
 
     try:
         # Check if Pareto analysis is enabled in config (optional)
