@@ -205,6 +205,12 @@ The script includes a basic framework for multi-criteria optimization using a we
 
 Additionally, the `find_pareto_approximation` method attempts to find a *set* of non-dominated solutions representing the trade-offs between Utility, Risk, and Sustainability. It does this by running the weighted-sum optimization multiple times with different weights.
 
+The framework is designed to be highly flexible. The provided `risk_func` and `sustainability_func` in the main script are illustrative examples:
+- **Risk (`risk_func`):** Implemented as the variance of the allocation vector, penalizing highly concentrated investments.
+- **Sustainability (`sustainability_func`):** Implemented to favor more evenly distributed investments.
+
+Users are strongly encouraged to define their own objective functions based on their specific domain knowledge. Any Python function that accepts the allocation vector `x` (a NumPy array) and returns a single float value can be used. For example, "Risk" could be redefined as the sensitivity to market changes, and "Sustainability" could be based on external ESG-ratings for each investment area.
+
 **Usage:**
 1.  Define your `risk_func` and `sustainability_func` (examples provided in `main`).
 2.  The script will automatically run `find_pareto_approximation` after the single optimizations.
