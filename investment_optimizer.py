@@ -13,6 +13,7 @@ from scipy.optimize import (minimize, differential_evolution, basinhopping, Boun
 import matplotlib.pyplot as plt
 import pandas as pd
 import seaborn as sns
+from typing import Any, Dict
 try:
     import plotly.express as px
     plotly_available = True
@@ -314,77 +315,130 @@ class InvestmentOptimizer:
         except Exception as e:
             logging.error(f"Fehler bei der Initialisierung: {e}", exc_info=True); raise
 
-    def update_parameters(self, roi_factors=None, synergy_matrix=None, total_budget=None,
-                          lower_bounds=None, upper_bounds=None, initial_allocation=None,
-                          utility_function_type=None, c=None,
-                          s_curve_L=None, s_curve_k=None, s_curve_x0=None):
-        """Aktualisiert die Parameter des Optimizers und validiert sie erneut."""
+    def update_parameters(self, updates: Dict[str, Any]):
+        """Aktualisiert die Parameter des Optimizers anhand eines Update-Dictionarys."""
         try:
-            parameters_updated = False; utility_params_changed = False
-            # --- Update Basisparameter ---
-            if roi_factors is not None:
-                new_roi = np.array(roi_factors)
-                if len(new_roi) != self.n: raise ValueError("Dimension von roi_factors kann nicht geändert werden.")
-                self.roi_factors = new_roi; parameters_updated = True; logging.debug("roi_factors aktualisiert.")
-            if synergy_matrix is not None:
-                synergy_matrix=np.array(synergy_matrix)
-                if not is_symmetric(synergy_matrix) or np.any(synergy_matrix < 0) or synergy_matrix.shape!=(self.n, self.n): raise ValueError("Ungültige synergy_matrix.")
-                self.synergy_matrix = synergy_matrix; parameters_updated = True; logging.debug("synergy_matrix aktualisiert.")
-            if total_budget is not None: self.total_budget = total_budget; parameters_updated = True; logging.debug("total_budget aktualisiert.")
-            if lower_bounds is not None:
-                new_lb = np.array(lower_bounds)
-                if len(new_lb) != self.n: raise ValueError("Dimension von lower_bounds kann nicht geändert werden.")
-                self.lower_bounds = new_lb; parameters_updated = True; logging.debug("lower_bounds aktualisiert.")
-            if upper_bounds is not None:
-                new_ub = np.array(upper_bounds)
-                if len(new_ub) != self.n: raise ValueError("Dimension von upper_bounds kann nicht geändert werden.")
-                self.upper_bounds = new_ub; parameters_updated = True; logging.debug("upper_bounds aktualisiert.")
+            parameters_updated = False
 
-            # --- Update Nutzenfunktion und Parameter ---
-            if utility_function_type is not None:
-                if utility_function_type not in ['log', 'quadratic', 's_curve']: raise ValueError(f"Unbekannter utility_function_type: {utility_function_type}")
-                if self.utility_function_type != utility_function_type: self.utility_function_type = utility_function_type; parameters_updated = True; utility_params_changed = True; logging.debug(f"utility_function_type -> {self.utility_function_type}")
-            # Handling von 'c' - Prüfung ob Argument explizit übergeben wurde
-            if 'c' in locals(): # Check if 'c' was passed as an argument (even if None)
-                 if c is not None: # Wenn c nicht None ist (neuer Wert oder Array)
-                     new_c = np.array(c)
-                     if len(new_c) != self.n: raise ValueError("Dimension von c passt nicht.")
-                     self.c = new_c; parameters_updated = True; utility_params_changed = True; logging.debug("Parameter c aktualisiert/gesetzt.")
-                 elif self.c is not None: # Wenn c explizit None ist und vorher nicht None war
-                     self.c = None; parameters_updated = True; utility_params_changed = True; logging.debug("Parameter c entfernt.")
-            # Handling von S-Kurven Parametern (similar logic)
-            if 's_curve_L' in locals():
-                new_L = np.array(s_curve_L) if s_curve_L is not None else None
-                if new_L is not None and len(new_L) != self.n: raise ValueError("Dimension von s_curve_L passt nicht.")
-                # Check if changed before setting flags
-                if not np.array_equal(self.s_curve_L, new_L, equal_nan=True):
-                    self.s_curve_L = new_L; parameters_updated = True; utility_params_changed = True; logging.debug("s_curve_L aktualisiert.")
-            if 's_curve_k' in locals():
-                 new_k = np.array(s_curve_k) if s_curve_k is not None else None
-                 if new_k is not None and len(new_k) != self.n: raise ValueError("Dimension von s_curve_k passt nicht.")
-                 if not np.array_equal(self.s_curve_k, new_k, equal_nan=True):
-                     self.s_curve_k = new_k; parameters_updated = True; utility_params_changed = True; logging.debug("s_curve_k aktualisiert.")
-            if 's_curve_x0' in locals():
-                 new_x0 = np.array(s_curve_x0) if s_curve_x0 is not None else None
-                 if new_x0 is not None and len(new_x0) != self.n: raise ValueError("Dimension von s_curve_x0 passt nicht.")
-                 if not np.array_equal(self.s_curve_x0, new_x0, equal_nan=True):
-                    self.s_curve_x0 = new_x0; parameters_updated = True; utility_params_changed = True; logging.debug("s_curve_x0 aktualisiert.")
+            # --- Parameter aus dem Dictionary verarbeiten ---
+            if 'roi_factors' in updates:
+                new_roi = np.array(updates['roi_factors'])
+                if len(new_roi) != self.n:
+                    raise ValueError("Dimension von roi_factors kann nicht geändert werden.")
+                self.roi_factors = new_roi
+                parameters_updated = True
+                logging.debug("roi_factors aktualisiert.")
+
+            if 'synergy_matrix' in updates:
+                synergy_matrix = np.array(updates['synergy_matrix'])
+                if (not is_symmetric(synergy_matrix) or np.any(synergy_matrix < 0)
+                        or synergy_matrix.shape != (self.n, self.n)):
+                    raise ValueError("Ungültige synergy_matrix.")
+                self.synergy_matrix = synergy_matrix
+                parameters_updated = True
+                logging.debug("synergy_matrix aktualisiert.")
+
+            if 'total_budget' in updates:
+                self.total_budget = updates['total_budget']
+                parameters_updated = True
+                logging.debug("total_budget aktualisiert.")
+
+            if 'lower_bounds' in updates:
+                new_lb = np.array(updates['lower_bounds'])
+                if len(new_lb) != self.n:
+                    raise ValueError("Dimension von lower_bounds kann nicht geändert werden.")
+                self.lower_bounds = new_lb
+                parameters_updated = True
+                logging.debug("lower_bounds aktualisiert.")
+
+            if 'upper_bounds' in updates:
+                new_ub = np.array(updates['upper_bounds'])
+                if len(new_ub) != self.n:
+                    raise ValueError("Dimension von upper_bounds kann nicht geändert werden.")
+                self.upper_bounds = new_ub
+                parameters_updated = True
+                logging.debug("upper_bounds aktualisiert.")
+
+            # --- Spezielle Behandlung für Utility-Parameter ---
+            if 'utility_function_type' in updates:
+                utility_function_type = updates['utility_function_type']
+                if utility_function_type not in ['log', 'quadratic', 's_curve']:
+                    raise ValueError(f"Unbekannter utility_function_type: {utility_function_type}")
+                self.utility_function_type = utility_function_type
+                parameters_updated = True
+                logging.debug(f"utility_function_type -> {self.utility_function_type}")
+
+            if 'c' in updates:
+                c_val = updates['c']
+                self.c = np.array(c_val) if c_val is not None else None
+                if self.c is not None and len(self.c) != self.n:
+                    raise ValueError("Dimension von c passt nicht.")
+                parameters_updated = True
+                logging.debug("Parameter c aktualisiert.")
+
+            if 's_curve_L' in updates:
+                new_L = np.array(updates['s_curve_L']) if updates['s_curve_L'] is not None else None
+                if new_L is not None and len(new_L) != self.n:
+                    raise ValueError("Dimension von s_curve_L passt nicht.")
+                self.s_curve_L = new_L
+                parameters_updated = True
+                logging.debug("s_curve_L aktualisiert.")
+
+            if 's_curve_k' in updates:
+                new_k = np.array(updates['s_curve_k']) if updates['s_curve_k'] is not None else None
+                if new_k is not None and len(new_k) != self.n:
+                    raise ValueError("Dimension von s_curve_k passt nicht.")
+                self.s_curve_k = new_k
+                parameters_updated = True
+                logging.debug("s_curve_k aktualisiert.")
+
+            if 's_curve_x0' in updates:
+                new_x0 = np.array(updates['s_curve_x0']) if updates['s_curve_x0'] is not None else None
+                if new_x0 is not None and len(new_x0) != self.n:
+                    raise ValueError("Dimension von s_curve_x0 passt nicht.")
+                self.s_curve_x0 = new_x0
+                parameters_updated = True
+                logging.debug("s_curve_x0 aktualisiert.")
 
             # --- Initial Allocation anpassen ---
-            current_initial_allocation = self.initial_allocation if initial_allocation is None else np.array(initial_allocation)
-            if initial_allocation is not None:
-                if len(current_initial_allocation) != self.n: raise ValueError("Länge der neuen initial_allocation passt nicht.")
-                self.initial_allocation = adjust_initial_guess(current_initial_allocation, self.lower_bounds, self.upper_bounds, self.total_budget); parameters_updated = True; logging.debug("initial_allocation aktualisiert/angepasst.")
-            elif parameters_updated: # Wenn andere Parameter geändert wurden, passe alte Allokation an
+            if 'initial_allocation' in updates:
+                current_initial_allocation = np.array(updates['initial_allocation'])
+                if len(current_initial_allocation) != self.n:
+                    raise ValueError("Länge der neuen initial_allocation passt nicht.")
+                self.initial_allocation = adjust_initial_guess(
+                    current_initial_allocation,
+                    self.lower_bounds,
+                    self.upper_bounds,
+                    self.total_budget)
+                parameters_updated = True
+                logging.debug("initial_allocation aktualisiert/angepasst.")
+            elif parameters_updated:
                 logging.debug(f"Alte Startallokation vor Anpassung: {self.initial_allocation}")
-                self.initial_allocation = adjust_initial_guess(self.initial_allocation, self.lower_bounds, self.upper_bounds, self.total_budget); logging.debug(f"Bestehende initial_allocation angepasst: {self.initial_allocation}")
+                self.initial_allocation = adjust_initial_guess(
+                    self.initial_allocation,
+                    self.lower_bounds,
+                    self.upper_bounds,
+                    self.total_budget)
+                logging.debug(f"Bestehende initial_allocation angepasst: {self.initial_allocation}")
 
             # --- Finale Validierung ---
-            validate_inputs(self.roi_factors, self.synergy_matrix, self.total_budget, self.lower_bounds, self.upper_bounds, self.initial_allocation,
-                            self.utility_function_type, self.c, self.s_curve_L, self.s_curve_k, self.s_curve_x0)
+            validate_inputs(
+                self.roi_factors,
+                self.synergy_matrix,
+                self.total_budget,
+                self.lower_bounds,
+                self.upper_bounds,
+                self.initial_allocation,
+                self.utility_function_type,
+                self.c,
+                self.s_curve_L,
+                self.s_curve_k,
+                self.s_curve_x0,
+            )
             logging.info(f"Parameter aktualisiert (Nutzenfunktion: {self.utility_function_type}).")
         except Exception as e:
-            logging.error(f"Fehler beim Aktualisieren der Parameter: {e}", exc_info=True); raise
+            logging.error(f"Fehler beim Aktualisieren der Parameter: {e}", exc_info=True)
+            raise
 
     def _calculate_utility(self, x):
         """Berechnet den Nutzen-Term basierend auf self.utility_function_type."""
