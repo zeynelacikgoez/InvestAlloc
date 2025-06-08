@@ -340,24 +340,30 @@ class TestInvestmentOptimizer(unittest.TestCase):
         """Testet die update_parameters Methode."""
         new_budget = 120.0; new_roi = self.roi_factors * 1.1
         # Teste Update einzelner Parameter
-        self.optimizer.update_parameters(total_budget=new_budget)
+        self.optimizer.update_parameters({'total_budget': new_budget})
         self.assertEqual(self.optimizer.total_budget, new_budget)
         self.assertAlmostEqual(np.sum(self.optimizer.initial_allocation), new_budget, delta=BUDGET_PRECISION*10)
         # Teste Update mehrerer Parameter
-        self.optimizer.update_parameters(roi_factors=new_roi, lower_bounds=self.lower_bounds + 5)
+        self.optimizer.update_parameters({
+            'roi_factors': new_roi,
+            'lower_bounds': self.lower_bounds + 5
+        })
         self.assertTrue(np.allclose(self.optimizer.roi_factors, new_roi))
         self.assertTrue(np.allclose(self.optimizer.lower_bounds, self.lower_bounds + 5))
         # Teste explizites Setzen von c auf None bei Quadratic Optimizer
-        self.optimizer_quad.update_parameters(c=None)
+        self.optimizer_quad.update_parameters({'c': None})
         self.assertIsNone(self.optimizer_quad.c, "c should be None after update")
         self.assertEqual(self.optimizer_quad.utility_function_type, 'quadratic', "Type should remain quadratic even if c is None temporarily") # Type bleibt, aber validate würde failen
         # Teste Wechsel des Utility-Typs
-        self.optimizer.update_parameters(utility_function_type='quadratic', c=self.c_param)
+        self.optimizer.update_parameters({
+            'utility_function_type': 'quadratic',
+            'c': self.c_param
+        })
         self.assertEqual(self.optimizer.utility_function_type, 'quadratic')
         self.assertTrue(np.allclose(self.optimizer.c, self.c_param))
         # Teste ungültiges Update
         with self.assertRaises(ValueError):
-            self.optimizer.update_parameters(synergy_matrix=np.array([[0,1],[0,0]])) # Falsche Form
+            self.optimizer.update_parameters({'synergy_matrix': np.array([[0,1],[0,0]])})
 
     # --- Test für identify_top_synergies ---
     def test_identify_top_synergies_correct(self):
